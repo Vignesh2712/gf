@@ -45,7 +45,7 @@ func startUDPServer(addr string) *gudp.Server {
 	return s
 }
 
-func Test_Basic(t *testing.T) {
+func TestBasic(t *testing.T) {
 	var ctx = context.TODO()
 	s := gudp.NewServer(gudp.FreePortAddress, func(conn *gudp.Conn) {
 		defer conn.Close()
@@ -143,7 +143,7 @@ func Test_Basic(t *testing.T) {
 
 // If the read buffer size is less than the sent package size,
 // the rest data would be dropped.
-func Test_Buffer(t *testing.T) {
+func TestBuffer(t *testing.T) {
 	var ctx = context.TODO()
 	s := gudp.NewServer(gudp.FreePortAddress, func(conn *gudp.Conn) {
 		defer conn.Close()
@@ -174,7 +174,7 @@ func Test_Buffer(t *testing.T) {
 	})
 }
 
-func Test_NewConn(t *testing.T) {
+func TestNewConn(t *testing.T) {
 	s := startUDPServer(gudp.FreePortAddress)
 
 	gtest.C(t, func(t *gtest.T) {
@@ -198,7 +198,7 @@ func Test_NewConn(t *testing.T) {
 	})
 }
 
-func Test_GetFreePorts(t *testing.T) {
+func TestGetFreePorts(t *testing.T) {
 	gtest.C(t, func(t *gtest.T) {
 		ports, err := gudp.GetFreePorts(2)
 		t.AssertNil(err)
@@ -206,7 +206,7 @@ func Test_GetFreePorts(t *testing.T) {
 	})
 }
 
-func Test_Server(t *testing.T) {
+func TestServer(t *testing.T) {
 	gudp.NewServer(gudp.FreePortAddress, func(conn *gudp.Conn) {
 		defer conn.Close()
 		for {
