@@ -381,6 +381,13 @@ func (c *Core) mappingAndFilterData(ctx context.Context, schema, table string, d
 	if err != nil {
 		return nil, err
 	}
+	if len(fieldsMap) == 0 {
+		toLowerTableName := strings.ToLower(table)
+		if toLowerTableName == table {
+			return nil, gerror.Newf("The table %s may not exist, or the field is 0", table)
+		}
+		return nil, gerror.Newf("The table %s may not exist, or the field is 0, you can try %s", table, toLowerTableName)
+	}
 	fieldsKeyMap := make(map[string]interface{}, len(fieldsMap))
 	for k := range fieldsMap {
 		fieldsKeyMap[k] = nil
