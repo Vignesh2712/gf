@@ -8,12 +8,14 @@ package gdb
 
 import (
 	"context"
+
 	"fmt"
 	"reflect"
 
 	"github.com/gogf/gf/v2/container/gset"
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
+
 	"github.com/gogf/gf/v2/internal/reflection"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
@@ -27,6 +29,15 @@ import (
 // see Model.Where.
 func (m *Model) All(where ...interface{}) (Result, error) {
 	var ctx = m.GetCtx()
+	return m.doGetAll(ctx, false, where...)
+}
+
+func (m *Model) all(pointer any, where ...interface{}) (Result, error) {
+	var ctx = m.GetCtx()
+	ctx = context.WithValue(ctx, scanPointerCtxKey, &scanPointer{
+		scan:    true,
+		pointer: pointer,
+	})
 	return m.doGetAll(ctx, false, where...)
 }
 
@@ -119,6 +130,25 @@ func (m *Model) One(where ...interface{}) (Record, error) {
 	return nil, nil
 }
 
+func (m *Model) one(pointer any, where ...any) (Record, error) {
+	var ctx = m.GetCtx()
+	if len(where) > 0 {
+		return m.Where(where[0], where[1:]...).One()
+	}
+	ctx = context.WithValue(ctx, scanPointerCtxKey, &scanPointer{
+		scan:    true,
+		pointer: pointer,
+	})
+	all, err := m.doGetAll(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) > 0 {
+		return all[0], nil
+	}
+	return nil, nil
+}
+
 // Array queries and returns data values as slice from database.
 // Note that if there are multiple columns in the result, it returns just one column values randomly.
 //
@@ -183,12 +213,68 @@ func (m *Model) doStruct(pointer interface{}, where ...interface{}) error {
 			model = m.Fields(pointer)
 		}
 	}
-	one, err := model.One(where...)
+
+	one, err := model.one(pointer, where...)
 	if err != nil {
 		return err
 	}
-	if err = one.Struct(pointer); err != nil {
-		return err
+	var (
+		// *struct => struct
+		// **struct => *struct
+		elemType  = reflect.TypeOf(pointer).Elem()
+		elemIsPtr = false
+	)
+
+	switch elemType.Kind() {
+	case reflect.Ptr:
+		elemIsPtr = true
+		// *struct => struct
+		elemType = elemType.Elem()
+	case reflect.Struct:
+	}
+
+	var (
+		table     *Table
+		tableName = getTableName(elemType)
+	)
+	tableValue, ok := tablesMap.Load(tableName)
+	if ok {
+		// It needs to be deleted, otherwise it will cause
+		// conflicts as long as the struct name is the same within different functions during testing
+		defer tablesMap.Delete(tableName)
+
+		table = tableValue.(*Table)
+		structPointerValue := reflect.ValueOf(pointer).Elem()
+
+		var structValue = reflect.New(elemType)
+		// UnmarshalValue
+		fn, ok := structValue.Interface().(iUnmarshalValue)
+		if ok {
+			err = fn.UnmarshalValue(one)
+			if err != nil {
+				return err
+			}
+			structValue = structValue.Elem()
+		} else {
+			structValue = structValue.Elem()
+			for colName, field := range table.fields {
+				fieldValue := field.GetReflectValue(structValue)
+				value := one[colName]
+				if value == nil {
+					continue
+				}
+				fieldValue.Set(reflect.ValueOf(value.Val()))
+			}
+		}
+		if elemIsPtr {
+			structValue = structValue.Addr()
+		}
+		structPointerValue.Set(structValue)
+
+	} else {
+		if err = one.Struct(pointer); err != nil {
+			return err
+		}
 	}
 	return model.doWithScanStruct(pointer)
 }
@@ -227,12 +313,74 @@ func (m *Model) doStructs(pointer interface{}, where ...interface{}) error {
 			)
 		}
 	}
-	all, err := model.All(where...)
+
+	all, err := model.all(pointer, where...)
 	if err != nil {
 		return err
 	}
-	if err = all.Structs(pointer); err != nil {
-		return err
+	var (
+		// *[]struct => []struct
+		elemType  = reflect.TypeOf(pointer).Elem()
+		sliceType = elemType
+		elemIsPtr = false
+	)
+	// []struct => struct
+	elemType = elemType.Elem()
+
+	switch elemType.Kind() {
+	case reflect.Ptr:
+		elemIsPtr = true
+		elemType = elemType.Elem()
+	case reflect.Struct:
+	}
+
+	var (
+		table     *Table
+		tableName = getTableName(elemType)
+	)
+
+	tableValue, ok := tablesMap.Load(tableName)
+	if ok {
+		// It needs to be deleted, otherwise it will cause
+		// conflicts as long as the struct name is the same within different functions during testing
+		defer tablesMap.Delete(tableName)
+		//
+		table = tableValue.(*Table)
+		slicePtr := reflect.ValueOf(pointer)
+		sliceValue := reflect.MakeSlice(sliceType, 0, len(all))
+
+		for _, record := range all {
+			var structValue = reflect.New(elemType)
+			// UnmarshalValue
+			fn, ok := structValue.Interface().(iUnmarshalValue)
+			if ok {
+				err = fn.UnmarshalValue(record)
+				if err != nil {
+					return err
+				}
+				structValue = structValue.Elem()
+			} else {
+				structValue = structValue.Elem()
+				for colName, field := range table.fields {
+					fieldValue := field.GetReflectValue(structValue)
+					val := record[colName].Val()
+					if val == nil {
+						continue
+					}
+					fieldValue.Set(reflect.ValueOf(val))
+				}
+			}
+			if elemIsPtr {
+				structValue = structValue.Addr()
+			}
+			sliceValue = reflect.Append(sliceValue, structValue)
+		}
+		slicePtr.Elem().Set(sliceValue)
+
+	} else {
+		if err = all.Structs(pointer); err != nil {
+			return err
+		}
 	}
 	return model.doWithScanStructs(pointer)
 }
